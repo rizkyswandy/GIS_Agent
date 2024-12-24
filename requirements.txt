@@ -1,0 +1,30 @@
+# Core dependencies
+langchain==0.3.13
+langchain-community==0.3.13
+langchain-core==0.3.28
+streamlit==1.41.1
+
+# Model and embeddings
+torch==2.5.1
+transformers==4.47.1
+sentence-transformers==3.3.1
+
+# Vector store
+faiss-cpu==1.9.0.post1
+
+# PDF processing
+pypdf==5.1.0
+
+# Utilities
+python-dotenv==1.0.1
+pydantic==2.10.4
+numpy==1.26.4
+
+# CUDA dependencies (if using GPU)
+nvidia-cuda-runtime-cu12==12.4.127
+nvidia-cuda-cupti-cu12==12.4.127
+nvidia-cudnn-cu12==9.1.0.70
+
+# Additional dependencies
+langchain-text-splitters==0.3.4
+typing_extensions==4.12.2
