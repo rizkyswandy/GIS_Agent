@@ -2,7 +2,7 @@ import streamlit as st
 import os
 from langchain_helper import setup_qa_chain
 from dotenv import load_dotenv
-
+import logging
 load_dotenv()
 
 DOCUMENTS_PATH = os.getenv('DOCUMENTS_PATH')
@@ -28,6 +28,18 @@ def initialize_chat_history():
         try:
             with st.spinner("Loading QA system..."):
                 st.session_state.qa_chain = setup_qa_chain()
+                
+                # Test the vectorstore dimensions
+                test_query = "test"
+                try:
+                    st.session_state.qa_chain.invoke({"query": test_query})
+                except AssertionError:
+                    st.error("Vector dimension mismatch. Please reinitialize your vector store.")
+                    return False
+                except Exception as e:
+                    st.error(f"Error testing QA chain: {str(e)}")
+                    return False
+                    
                 st.success("✅ System loaded successfully")
         except Exception as e:
             st.error(f"Error loading system: {str(e)}")
@@ -71,27 +83,27 @@ def main():
 
         with st.chat_message("assistant"):
             try:
-                result = st.session_state.qa_chain({"query": prompt})
+                st.write("Running QA chain with prompt:", prompt)  
+                result = st.session_state.qa_chain.invoke({"query": prompt})
+                st.write("QA chain result:", result) 
+                
                 response = result['result']
 
-                if "Helpful Answer:" in response:
-                    response = response.split("Helpful Answer:", 1)[1].strip()
+                if "Helpful Answer: Assistant:" in response:
+                    response = response.split("Helpful Answer: Assistant:", 1)[1].strip()
 
                 st.write(response)
 
-                
                 with st.expander("View Sources"):
                     for doc in result['source_documents']:
                         st.markdown(f"**From page {doc.metadata['page']}:**")
                         st.write(doc.page_content)
                         st.markdown("---")
-                
+
                 st.session_state.messages.append({"role": "assistant", "content": response})
-                
             except Exception as e:
-                error_msg = f"Error generating response: {str(e)}"
-                st.error(error_msg)
-                st.session_state.messages.append({"role": "assistant", "content": error_msg})
+                logging.error("Error during QA chain execution:", exc_info=True)
+                st.error(f"Error generating response: {str(e)}")
 
 if __name__ == "__main__":
     main()

@@ -5,29 +5,47 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 import hashlib
+import logging
 
 load_dotenv()
 
 DOCUMENTS_PATH = os.getenv('DOCUMENTS_PATH')
 VECTORS_PATH = os.getenv('VECTORS_PATH')
 
+def verify_vectorstore(vectorstore, embeddings):
+    test_query = "test"
+    test_embedding = embeddings.embed_query(test_query)
+    try:
+        vectorstore.similarity_search_by_vector(test_embedding)
+        return True
+    except AssertionError:
+        logging.error("Vector dimension mismatch")
+        return False
+    except Exception as e:
+        logging.error(f"Error verifying vector store: {e}")
+        return False
+
 def process_pdfs():
     """Process all PDFs and generate vector store"""
     print("Starting PDF processing...")
     
-    # Create vectors directory if it doesn't exist
     os.makedirs(VECTORS_PATH, exist_ok=True)
     
-    # Load all PDFs
     documents = []
     for file in os.listdir(DOCUMENTS_PATH):
         if file.endswith('.pdf'):
             print(f"Processing {file}...")
             pdf_path = os.path.join(DOCUMENTS_PATH, file)
             loader = PyPDFLoader(pdf_path)
-            documents.extend(loader.load())
+            pages = loader.load()
+            
+            for page in pages:
+                page.metadata.update({
+                    "source": file,
+                    "page": page.metadata.get("page", 0) + 1
+                })
+            documents.extend(pages)
     
-    # Split documents
     print("Splitting documents...")
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=1000,
@@ -36,23 +54,22 @@ def process_pdfs():
     )
     texts = text_splitter.split_documents(documents)
     
-    # Generate embeddings and store
     print("Generating embeddings...")
     embeddings = HuggingFaceEmbeddings(
-        model_name="sentence-transformers/all-MiniLM-L6-v2",
+        model_name="sentence-t5-xl",
         model_kwargs={'device': 'cuda'}
     )
     
-    # Create and save vector store
     print("Creating vector store...")
     vectorstore = FAISS.from_documents(texts, embeddings)
     
-    # Save vector store
+    if not verify_vectorstore(vectorstore, embeddings):
+        raise RuntimeError("Vector store verification failed")
+    
     vector_store_path = os.path.join(VECTORS_PATH, "faiss_index")
     print(f"Saving vector store to {vector_store_path}...")
     vectorstore.save_local(vector_store_path)
     
-    # Generate and save document hash
     hash_md5 = hashlib.md5()
     for filename in sorted(os.listdir(DOCUMENTS_PATH)):
         if filename.endswith('.pdf'):

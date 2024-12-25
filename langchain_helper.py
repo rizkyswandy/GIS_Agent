@@ -12,8 +12,9 @@ from pydantic import Field
 import torch
 import os
 import hashlib
-
 from dotenv import load_dotenv
+
+os.environ["CUDA_VISIBLE_DEVICES"] = "2,3"
 
 load_dotenv()
 
@@ -23,6 +24,9 @@ VECTORS_PATH = os.getenv('VECTORS_PATH')
 
 if not all([MODEL_PATH, DOCUMENTS_PATH, VECTORS_PATH]):
     raise ValueError("Missing required environment variables. Please check your .env file.")
+
+chat_history = []
+MAX_HISTORY_TOKENS = 10000 
 
 class LocalLlamaLLM(LLM):
     model_path: str
@@ -50,7 +54,13 @@ class LocalLlamaLLM(LLM):
         run_manager: Optional[Any] = None,
         **kwargs
     ) -> str:
-        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+        truncate_history_if_needed()
+        
+        # Construct context from chat history
+        context = "\n".join([f"User: {entry['user']}\nAssistant: {entry['assistant']}" for entry in chat_history])
+        full_prompt = f"{context}\nUser: {prompt}\nAssistant:"
+
+        inputs = self.tokenizer(full_prompt, return_tensors="pt").to(self.device)
         outputs = self.model.generate(
             **inputs,
             max_new_tokens=512,
@@ -59,19 +69,34 @@ class LocalLlamaLLM(LLM):
             top_p=0.95,
             repetition_penalty=1.15
         )
-        return self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+        
+        response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+        
+        # Append to history
+        chat_history.append({"user": prompt, "assistant": response})
+        
+        return response
+
+def truncate_history_if_needed():
+    """Ensure chat history fits within the token limit."""
+    global chat_history
+    while sum(len(entry['user']) + len(entry['assistant']) for entry in chat_history) > MAX_HISTORY_TOKENS:
+        chat_history.pop(0)
+
+def reset_chat_history():
+    """Clear the chat history."""
+    global chat_history
+    chat_history = []
 
 def get_documents_hash():
-    """Generate a hash of all PDFs in the documents folder"""
+    """Generate a hash of all PDFs in the documents folder."""
     hash_md5 = hashlib.md5()
-    
     for filename in sorted(os.listdir(DOCUMENTS_PATH)):
         if filename.endswith('.pdf'):
             filepath = os.path.join(DOCUMENTS_PATH, filename)
             with open(filepath, 'rb') as f:
                 for chunk in iter(lambda: f.read(4096), b''):
                     hash_md5.update(chunk)
-    
     return hash_md5.hexdigest()
 
 def process_pdf_folder(folder_path):
@@ -82,7 +107,6 @@ def process_pdf_folder(folder_path):
             pdf_path = os.path.join(folder_path, file)
             loader = PyPDFLoader(pdf_path)
             documents.extend(loader.load())
-    
     return split_documents(documents)
 
 def split_documents(documents):
@@ -95,10 +119,9 @@ def split_documents(documents):
     return text_splitter.split_documents(documents)
 
 def get_vectorstore(texts=None, force_refresh=False):
-    """Get or create vector store"""
+    """Get or create vector store."""
     os.makedirs(VECTORS_PATH, exist_ok=True)
-    
-    # Generate hash of current documents
+
     current_hash = get_documents_hash()
     hash_file_path = os.path.join(VECTORS_PATH, "docs_hash")
     vector_store_path = os.path.join(VECTORS_PATH, "faiss_index")
@@ -113,7 +136,7 @@ def get_vectorstore(texts=None, force_refresh=False):
     if regenerate:
         print("Generating new vector store...")
         embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2",
+            model_name="sentence-t5-xl",
             model_kwargs={'device': 'cuda'}
         )
         
@@ -121,14 +144,13 @@ def get_vectorstore(texts=None, force_refresh=False):
             texts = process_pdf_folder(DOCUMENTS_PATH)
         
         vectorstore = FAISS.from_documents(texts, embeddings)
-        
         vectorstore.save_local(vector_store_path)
         with open(hash_file_path, 'w') as f:
             f.write(current_hash)
     else:
         print("Loading existing vector store...")
         embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2",
+            model_name="sentence-t5-xl",
             model_kwargs={'device': 'cuda'}
         )
         vectorstore = FAISS.load_local(vector_store_path, embeddings, allow_dangerous_deserialization=True)
@@ -136,7 +158,7 @@ def get_vectorstore(texts=None, force_refresh=False):
     return vectorstore
 
 def setup_qa_chain(force_refresh=False):
-    """Set up the question-answering chain with local embeddings and LLM."""
+    """Set up the QA chain."""
     try:
         vectorstore = get_vectorstore(force_refresh=force_refresh)
         
